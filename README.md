@@ -7,13 +7,13 @@ A custom map editor designed for editing and creating levels/maps.
 * **Run locally:** You can clone this repository and run it locally on your machine.
 
 ---
+![Map Original](https://raw.githubusercontent.com/freeze-man-1/CrossHermitMapEditor/refs/heads/main/map01.png)
+![Map Overlay](https://raw.githubusercontent.com/freeze-man-1/CrossHermitMapEditor/refs/heads/main/Screenshot%202026-06-21%20170433.png)
 
 ## Features
 Based on the current source implementation, the editor supports the following features:
 * **Map Rendering & Visualization:** View map grids, layers, and tiles dynamically.
 * **Export:** Easily save map configurations in CSV format.
-
-
 ---
 
 ## Roadmap & In-Development
