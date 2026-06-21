@@ -10,10 +10,8 @@ A custom map editor designed for editing and creating levels/maps.
 
 ## Features
 Based on the current source implementation, the editor supports the following features:
-* **Map Rendering & Visualization:** View and edit map grids, layers, and tiles dynamically.
-* **Layer Management:** Supports editing multiple map layers (such as collision, background, and foreground elements).
-* **Tile & Collision Editing:** Place tilesets and modify collision maps directly within the interface.
-* **Import & Export:** Easily load and save map configurations in JSON format to integrate with your game projects.
+* **Map Rendering & Visualization:** View map grids, layers, and tiles dynamically.
+* **Export:** Easily save map configurations in CSV format.
 
 
 ---
