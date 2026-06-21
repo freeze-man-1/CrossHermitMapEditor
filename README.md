@@ -19,5 +19,5 @@ Based on the current source implementation, the editor supports the following fe
 ---
 
 ## Roadmap & In-Development
-* **Re-importing Map Data:** We are actively working on improving the workflow for re-importing and updating existing map data seamlessly.
+* **Re-importing Map Data:** I am actively working on improving the workflow for re-importing and updating existing map data seamlessly.
 * **New Map Support:** Expanding capabilities to create and support entirely new map structures and layouts.
