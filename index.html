@@ -1,0 +1,1452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Map Overlay Workbench</title>
+<style>
+:root{
+  --bg: #11140f;
+  --bg-panel: #161b13;
+  --bg-raised: #1d2318;
+  --line: #2c3424;
+  --line-soft: #232a1c;
+  --ink: #d8dbc8;
+  --ink-dim: #8a9178;
+  --ink-faint: #5b6249;
+  --accent: #c4d96a;
+  --accent-dim: #7d8f4a;
+  --warn: #e0a64f;
+  --bad: #d97a5f;
+  --good: #6fae7c;
+  --mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  --serif: "Source Serif Pro", Georgia, serif;
+}
+* { box-sizing: border-box; }
+html,body{ margin:0; padding:0; background:var(--bg); color:var(--ink); font-family: var(--mono); font-size: 13px; height:100%; }
+body{ display:flex; flex-direction:column; min-height:100vh; }
+::-webkit-scrollbar{ width:10px; height:10px; }
+::-webkit-scrollbar-track{ background:var(--bg-panel); }
+::-webkit-scrollbar-thumb{ background:var(--line); }
+::-webkit-scrollbar-thumb:hover{ background:var(--accent-dim); }
+
+header{
+  border-bottom:1px solid var(--line);
+  background: linear-gradient(180deg, var(--bg-raised), var(--bg-panel));
+  padding: 14px 20px; display:flex; align-items:baseline; gap:18px; flex-wrap:wrap;
+}
+header .title{ font-family: var(--serif); font-size: 19px; color: var(--ink); font-weight: 600; }
+header .title .accent{ color: var(--accent); font-style:italic; }
+header .subtitle{ color: var(--ink-faint); font-size: 11.5px; letter-spacing: 0.04em; text-transform: uppercase; }
+header .spacer{ flex:1; }
+
+.toolbar{
+  border-bottom:1px solid var(--line); background: var(--bg-panel);
+  padding: 10px 20px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+}
+button{
+  font-family: var(--mono); font-size: 12px; background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--line); padding: 7px 13px; cursor: pointer; letter-spacing: 0.02em;
+  transition: border-color .12s, color .12s, background .12s;
+}
+button:hover:not(:disabled){ border-color: var(--accent-dim); color: var(--accent); }
+button:active:not(:disabled){ background: var(--line-soft); }
+button:disabled{ opacity:.35; cursor:not-allowed; }
+button.primary{ background: var(--accent); color: #11140f; border-color: var(--accent); font-weight:600; }
+button.primary:hover:not(:disabled){ background: #d4e885; border-color:#d4e885; }
+input[type=file]{ display:none; }
+.drop-label{ border: 1px dashed var(--line); padding: 7px 13px; cursor:pointer; color: var(--ink-dim); font-size:12px; }
+.drop-label:hover{ border-color: var(--accent-dim); color: var(--accent); }
+.toolbar .sep{ width:1px; height:20px; background:var(--line); margin:0 4px; }
+.toolbar label.inline{ display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--ink-dim); }
+.toolbar input[type=range]{ width:90px; accent-color: var(--accent); }
+.toolbar input[type=number]{
+  width:56px; font-family:var(--mono); background:var(--bg); border:1px solid var(--line); color:var(--ink); padding:4px 6px; font-size:11.5px;
+}
+.toolbar .val{ color:var(--accent); font-size:11px; width:34px; display:inline-block; text-align:right; }
+
+.tabs{ display:flex; gap:2px; border-bottom:1px solid var(--line); background: var(--bg-panel); padding: 0 20px; }
+.tab{ padding: 10px 16px; cursor:pointer; color: var(--ink-faint); font-size:12px; letter-spacing:0.03em; text-transform:uppercase; border-bottom: 2px solid transparent; }
+.tab:hover{ color: var(--ink-dim); }
+.tab.active{ color: var(--accent); border-bottom-color: var(--accent); }
+
+.view{ display:none; flex:1; min-height:0; }
+.view.active{ display:flex; flex-direction:column; flex:1; min-height:0; }
+
+.empty-state{ flex:1; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; color:var(--ink-faint); padding:40px; text-align:center; }
+.empty-state .big{ font-family: var(--serif); font-size:20px; color: var(--ink-dim); font-style:italic; }
+.empty-state .hint{ font-size:12px; max-width:480px; line-height:1.6; }
+.empty-state .dz{ border: 1px dashed var(--line); padding: 26px 40px; cursor:pointer; min-width:220px; }
+.empty-state .dz:hover{ border-color: var(--accent-dim); }
+.empty-state .dz.over{ border-color: var(--accent); background: rgba(196,217,106,0.04); }
+.empty-state .dz .ok{ color: var(--good); }
+
+.overlay-layout{ display:flex; flex:1; min-height:0; }
+.canvas-pane{ flex:1; overflow:hidden; position:relative; background: repeating-conic-gradient(#1a1f15 0% 25%, #161b13 0% 50%) 50% / 24px 24px; }
+.canvas-viewport{ position:absolute; top:0; left:0; width:100%; height:100%; overflow:hidden; cursor:grab; }
+.canvas-viewport.grabbing{ cursor:grabbing; }
+.canvas-wrap{ position:absolute; top:0; left:0; transform-origin: 0 0; }
+#baseCanvas, #overlayCanvas{ position:absolute; top:0; left:0; image-rendering: pixelated; }
+#overlayCanvas{ cursor: crosshair; }
+
+.pan-controls{
+  position:absolute; bottom:16px; right:16px; z-index:30;
+  display:grid; grid-template-columns: repeat(3, 34px); grid-template-rows: repeat(3, 34px); gap:3px;
+  background: rgba(17,20,15,0.85); border:1px solid var(--line); padding:6px;
+}
+.pan-controls button{
+  padding:0; display:flex; align-items:center; justify-content:center; font-size:14px;
+  background: var(--bg-raised); border:1px solid var(--line); color: var(--ink-dim);
+}
+.pan-controls button:hover{ color: var(--accent); border-color: var(--accent-dim); }
+.pan-controls button.center{ font-size:10px; }
+
+.zoom-controls{
+  position:absolute; bottom:16px; left:16px; z-index:30;
+  display:flex; gap:3px; background: rgba(17,20,15,0.85); border:1px solid var(--line); padding:6px;
+}
+.zoom-controls button{ width:30px; height:30px; padding:0; }
+.zoom-controls .zoomval{ display:flex; align-items:center; justify-content:center; width:50px; font-size:11px; color:var(--ink-dim); }
+.rot-snap-row{ display:flex; gap:4px; margin-top:6px; }
+.rot-snap-row button{ flex:1; padding:5px 0; font-size:10.5px; }
+.move-pad-row{ display:flex; gap:10px; align-items:center; }
+.move-pad{
+  display:grid; grid-template-columns: repeat(3, 26px); grid-template-rows: repeat(3, 26px); gap:2px;
+  flex-shrink:0;
+}
+.move-pad button{ padding:0; display:flex; align-items:center; justify-content:center; font-size:12px; }
+.move-pad-center{ background: var(--bg); border:1px solid var(--line-soft); }
+.handle-readout{
+  font-size:10.5px; color:var(--ink-dim); line-height:1.7;
+  background: var(--bg); border:1px solid var(--line-soft); padding:8px 10px;
+}
+.handle-readout .hr-row{ display:flex; justify-content:space-between; align-items:center; padding:2px 0; }
+.handle-readout .hr-key{ color:var(--ink-faint); flex-shrink:0; width:28px; }
+.handle-readout .hr-inputs{ display:flex; gap:4px; }
+.handle-readout .hr-num{
+  width:56px; font-family:var(--mono); background:var(--bg-panel); border:1px solid var(--line);
+  color:var(--ink); padding:3px 5px; font-size:10.5px;
+}
+.handle-readout .hr-num:focus{ outline:none; border-color:var(--accent-dim); background:var(--bg-raised); color:var(--ink); }
+.pin-marker{
+  position:absolute; width:16px; height:16px; margin:-8px 0 0 -8px;
+  border-radius:50%; background: var(--accent); border:2px solid #11140f;
+  z-index:25; pointer-events:none; box-shadow: 0 0 0 2px var(--accent);
+}
+.pin-marker .pin-label{
+  position:absolute; top:-22px; left:50%; transform:translateX(-50%);
+  font-size:10px; color:#11140f; background:var(--accent); padding:1px 5px; white-space:nowrap;
+}
+.pin-marker.dragging{ z-index:30; }
+
+.side-pane{ width: 300px; border-left:1px solid var(--line); background: var(--bg-panel); display:flex; flex-direction:column; overflow-y:auto; }
+.side-section{ padding: 14px 16px; border-bottom: 1px solid var(--line-soft); }
+.side-section h3{ font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-faint); margin:0 0 10px 0; }
+.field-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; font-size:11.5px; color:var(--ink-dim); }
+.field-row input[type=number]{
+  width:64px; font-family:var(--mono); background:var(--bg); border:1px solid var(--line); color:var(--ink); padding:4px 6px; font-size:11.5px;
+}
+.field-row input[type=range]{ flex:1; accent-color:var(--accent); margin: 0 8px; }
+
+.hover-info{ font-size:11.5px; line-height:1.7; color: var(--ink-dim); }
+.hover-info b{ color: var(--accent); }
+.hover-info .swatch{ display:inline-block; width:10px; height:10px; margin-right:6px; vertical-align:middle; border:1px solid var(--line); }
+
+.legend-list{ max-height:220px; overflow-y:auto; }
+.legend-item{ display:flex; align-items:center; gap:8px; padding:4px 0; font-size:11px; cursor:pointer; }
+.legend-item:hover{ background: var(--bg-raised); }
+.legend-item .swatch{ width:14px; height:14px; flex-shrink:0; border:1px solid var(--line); }
+.legend-item .lbl{ flex:1; color:var(--ink-dim); }
+.legend-item .lbl input{
+  width:100%; background:transparent; border:1px solid transparent; color:var(--ink-dim); font-family:var(--mono); font-size:11px; padding:2px 4px;
+}
+.legend-item .lbl input:hover{ border-color: var(--line); }
+.legend-item .lbl input:focus{ outline:none; border-color:var(--accent-dim); background:var(--bg); color:var(--ink); }
+.legend-item .cnt{ color:var(--ink-faint); font-size:10px; }
+.legend-item.hidden-layer{ opacity:.35; }
+
+.coord-readout{
+  position:absolute; pointer-events:none; background: rgba(17,20,15,0.92); border:1px solid var(--accent-dim);
+  color: var(--ink); padding: 6px 10px; font-size:11px; line-height:1.6; z-index:20; white-space:nowrap;
+}
+
+#toast{
+  position: fixed; bottom: 20px; right:20px; background: var(--bg-raised); border:1px solid var(--accent-dim);
+  color: var(--ink); padding: 12px 18px; font-size:12px; max-width: 360px; line-height:1.5;
+  opacity:0; transform: translateY(8px); pointer-events:none; transition: opacity .2s, transform .2s; z-index: 100;
+}
+#toast.show{ opacity:1; transform:translateY(0); }
+#toast.bad{ border-color: var(--bad); color: var(--bad); }
+
+.docs-wrap{ flex:1; overflow-y:auto; padding: 28px 36px; max-width: 820px; }
+.docs-wrap h1{ font-family:var(--serif); font-size:22px; color:var(--ink); margin: 0 0 6px 0; }
+.docs-wrap .docs-sub{ color: var(--ink-faint); font-size:12px; margin-bottom:24px; }
+.docs-wrap h2{ font-family:var(--serif); font-style:italic; font-size:16px; color: var(--accent); margin: 26px 0 10px 0; border-bottom:1px solid var(--line); padding-bottom:6px;}
+.docs-wrap p{ line-height:1.7; color: var(--ink); font-size:12.5px; margin: 0 0 12px 0; }
+.docs-wrap code{ background: var(--bg-panel); border:1px solid var(--line); padding:1px 5px; color:var(--accent); font-size:11.5px;}
+.docs-wrap ul{ line-height:1.8; font-size:12.5px; padding-left: 20px; }
+.docs-wrap li{ margin-bottom:5px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">Map Overlay <span class="accent">Workbench</span></div>
+  <div class="subtitle">MAP01.BIN tile data &times; screenshot alignment</div>
+  <div class="spacer"></div>
+</header>
+
+<div class="toolbar" id="toolbar" style="display:none;">
+  <label class="drop-label" for="pngInput">Replace image…</label>
+  <input type="file" id="pngInput" accept=".png,.jpg,.jpeg,.gif,.webp,.map">
+  <label class="drop-label" for="binInput">Replace MAP##.BIN…</label>
+  <input type="file" id="binInput" accept=".bin">
+  <div class="sep"></div>
+  <label class="inline">Overlay opacity <input type="range" id="opacitySlider" min="0" max="100" value="55"><span class="val" id="opacityVal">55%</span></label>
+  <div class="sep"></div>
+  <button id="exportBtn">Export overlay PNG</button>
+  <button id="exportKeyBtn">Export coordinate key (CSV)</button>
+</div>
+
+<div class="tabs" id="tabs" style="display:none;">
+  <div class="tab active" data-view="overlay">Overlay &amp; Calibration</div>
+  <div class="tab" data-view="docs">How this works</div>
+</div>
+
+<div class="view active" id="view-overlay">
+  <div class="empty-state" id="emptyState">
+    <div class="dz" id="dropZoneBin">
+      <div class="big">Drop a MAP##.BIN file</div>
+      <div class="hint" id="binStatus">Parsed as a 64&times;96-style tile grid. The canvas opens at 2048&times;1536 by default (the known size of this map's reference screenshot) -- drop a screenshot afterward to use it as a background, or work from the tile colors alone.</div>
+    </div>
+  </div>
+</div>
+
+<div class="view" id="view-docs">
+  <div class="docs-wrap" id="docsWrap"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ============================================================================
+// Map Overlay Workbench
+// ============================================================================
+const $ = sel => document.querySelector(sel);
+const $$ = sel => Array.from(document.querySelectorAll(sel));
+
+let state = {
+  img: null,            // HTMLImageElement
+  imgBitmap: null,
+  binBuffer: null,       // ArrayBuffer of MAP##.BIN
+  tiles: [],             // [{x,y,terrain,flag}]
+  tileW: 64, tileH: 96,
+  legendColors: {},       // terrainValue -> [r,g,b]
+  legendNames: {},         // terrainValue -> user label (persisted in-session)
+  hiddenTerrains: new Set(),
+  // default canvas size assumed before any image is loaded -- matches the
+  // known map screenshot dimensions so the workbench is usable immediately
+  canvasW: 2048,
+  canvasH: 1536,
+  // pan/zoom view transform (independent of calibration -- this just moves
+  // the camera over the canvas, it never changes tile math)
+  view: {
+    panX: 0, panY: 0, zoom: 1,
+  },
+  opacity: 0.55,
+  hoverTile: null,
+};
+
+function toast(msg, bad) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = bad ? 'show bad' : 'show';
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 3200);
+}
+
+// ---------------------------------------------------------------------------
+// File loading
+// ---------------------------------------------------------------------------
+// Routes to the right loader based on file extension: a real image file
+// (png/jpg/etc, anything the browser's <img> can decode) goes through
+// loadPng; a raw MAP##.MAP container goes through loadMapImage, decoding
+// RGB555 tiles into a background image automatically.
+function loadImageOrMap(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.map')) {
+    loadMapImage(file);
+  } else {
+    loadPng(file);
+  }
+}
+
+function loadPng(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      state.img = img;
+      state.canvasW = img.width;
+      state.canvasH = img.height;
+      $('#pngStatus') && ($('#pngStatus').innerHTML = `<span class="ok">Loaded ${file.name} (${img.width}&times;${img.height})</span>`);
+      checkReadyToInit();
+      if (document.getElementById('overlayCanvas')) { setupCanvases(); renderAll(); }
+    };
+    img.onerror = () => toast('Could not decode image file', true);
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function loadMapImage(file) {
+  const reader = new FileReader();
+  reader.onerror = () => {
+    console.error('FileReader error reading', file.name, reader.error);
+    toast('Could not read ' + file.name + ': ' + reader.error, true);
+  };
+  reader.onload = () => {
+    let decoded;
+    try {
+      decoded = decodeMapImage(reader.result);
+    } catch (e) {
+      console.error('decodeMapImage failed for', file.name, e);
+      toast('Could not decode this .MAP file: ' + e.message, true);
+      return;
+    }
+
+    if (!decoded || !decoded.width || !decoded.height) {
+      console.error('decodeMapImage returned an invalid result', decoded);
+      toast('Decoded .MAP produced no usable image data', true);
+      return;
+    }
+
+    // Draw straight into a canvas and use that canvas as the "image" --
+    // drawImage() accepts a canvas element directly, so there is no need to
+    // round-trip through toBlob()/PNG re-encode/new Image() decode. That
+    // round trip was a real, observed failure point (the browser's image
+    // decoder rejecting the re-encoded blob on some inputs) and is also
+    // strictly slower for large maps. The canvas itself never needs to be
+    // attached to the DOM for drawImage() to work.
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = decoded.width;
+      canvas.height = decoded.height;
+      const ctx = canvas.getContext('2d');
+      const imgData = new ImageData(decoded.pixels, decoded.width, decoded.height);
+      ctx.putImageData(imgData, 0, 0);
+
+      state.img = canvas;
+      state.canvasW = canvas.width;
+      state.canvasH = canvas.height;
+      toast(`Decoded ${file.name}: ${decoded.tilesX}\u00d7${decoded.tilesY} tiles (${decoded.tileW}\u00d7${decoded.tileH}px each) \u2192 ${canvas.width}\u00d7${canvas.height}`);
+      checkReadyToInit();
+      if (document.getElementById('overlayCanvas')) { setupCanvases(); renderAll(); }
+    } catch (e) {
+      console.error('Canvas/ImageData step failed for', file.name, e);
+      toast('Could not build the decoded image (' + decoded.width + '\u00d7' + decoded.height + '): ' + e.message, true);
+      return;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function loadBin(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    state.binBuffer = reader.result;
+    try {
+      parseMapBin(state.binBuffer);
+      toast(`Parsed ${file.name}: ${state.tiles.length} tiles, grid ${state.tileW}\u00d7${state.tileH}`);
+      if ($('#overlayCanvas')) {
+        renderLegend();
+        renderAll();
+      } else {
+        checkReadyToInit();
+      }
+    } catch (e) {
+      toast('Could not parse this .BIN as a map tile file: ' + e.message, true);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function checkReadyToInit() {
+  if (state.binBuffer && state.tiles.length) {
+    initWorkbench();
+  } else if (state.img && !state.binBuffer) {
+    if (!document.getElementById('dropZoneBin')) showBinPrompt();
+  }
+}
+
+function showPngPrompt() {
+  // Only shown briefly before initWorkbench takes over -- kept for the case
+  // where bin loads but we want to surface an optional image drop first.
+}
+
+// ---------------------------------------------------------------------------
+// MAP##.MAP parsing -- the actual rendered background image, as a tile atlas.
+//
+// Confirmed format (pixel-perfect match against reference screenshots for
+// two different maps of different sizes):
+//   bytes 0-1 (u16): tile grid width  (tiles, not pixels)
+//   bytes 2-3 (u16): tile grid height
+//   ... a small amount of unrelated header data ...
+//   offset 0x404: a generic bin-container, structured exactly like the
+//     ch_bin.py unpack format: [total_size:u32][file_count:u32]
+//     [offsets:u32 * file_count], all offsets relative to 0x404 itself.
+//     file_count always equals gridW * gridH.
+//   each sub-file: 12-byte header --
+//     bytes 0-3: "DX" 0x02 0x00 magic
+//     bytes 4-5 (u16): tile width in pixels  (256 in every map seen so far)
+//     bytes 6-7 (u16): tile height in pixels
+//     bytes 8-9 (u16): pitch (unused by the decoder below)
+//     bytes 10-11 (u16): flags (unused by the decoder below)
+//   followed immediately by width*height pixels, RGB555 (NOT 565 -- the top
+//   bit of each u16 is unused), little-endian, plain raster order, no
+//   swizzling. Tiles are laid out left-to-right then top-to-bottom across
+//   the grid to form the full image.
+// ---------------------------------------------------------------------------
+function decodeMapImage(buf) {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 0x404 + 8) throw new Error('file too small to contain the expected header');
+
+  const tilesX = dv.getUint16(0, true);
+  const tilesY = dv.getUint16(2, true);
+  if (tilesX === 0 || tilesY === 0 || tilesX > 256 || tilesY > 256) {
+    throw new Error(`tile grid (${tilesX}x${tilesY}) looks implausible -- this may not be a recognized MAP##.MAP layout`);
+  }
+
+  const base = 0x404;
+  const totalSize = dv.getUint32(base, true);
+  const fileCount = dv.getUint32(base + 4, true);
+  if (fileCount !== tilesX * tilesY) {
+    throw new Error(`container file count (${fileCount}) doesn't match the tile grid (${tilesX}\u00d7${tilesY}=${tilesX*tilesY})`);
+  }
+  if (base + totalSize > buf.byteLength) {
+    throw new Error('container size exceeds the actual file length -- file may be truncated');
+  }
+
+  const offsets = [];
+  for (let i = 0; i < fileCount; i++) offsets.push(dv.getUint32(base + 8 + i * 4, true));
+
+  // Peek the first tile to get per-tile pixel dimensions (every map seen so
+  // far uses 256x256, but this reads it from the file rather than assuming).
+  const s0 = base + offsets[0];
+  const magic = new Uint8Array(buf, s0, 2);
+  if (magic[0] !== 0x44 || magic[1] !== 0x58) {
+    throw new Error('first tile is missing the expected "DX" magic -- offsets may be wrong for this file');
+  }
+  const tileW = dv.getUint16(s0 + 4, true);
+  const tileH = dv.getUint16(s0 + 6, true);
+
+  const fullW = tilesX * tileW, fullH = tilesY * tileH;
+  const out = new Uint8ClampedArray(fullW * fullH * 4);
+
+  for (let i = 0; i < fileCount; i++) {
+    const start = base + offsets[i];
+    const tw = dv.getUint16(start + 4, true);
+    const th = dv.getUint16(start + 6, true);
+    const pixOff = start + 12;
+    const tx = (i % tilesX) * tileW;
+    const ty = Math.floor(i / tilesX) * tileH;
+
+    for (let py = 0; py < th; py++) {
+      for (let px = 0; px < tw; px++) {
+        const v = dv.getUint16(pixOff + (py * tw + px) * 2, true);
+        const r5 = (v >> 10) & 0x1f, g5 = (v >> 5) & 0x1f, b5 = v & 0x1f;
+        const r = (r5 * 255 / 31) | 0, g = (g5 * 255 / 31) | 0, b = (b5 * 255 / 31) | 0;
+        const dstX = tx + px, dstY = ty + py;
+        const di = (dstY * fullW + dstX) * 4;
+        out[di] = r; out[di+1] = g; out[di+2] = b; out[di+3] = 255;
+      }
+    }
+  }
+
+  return { width: fullW, height: fullH, pixels: out, tilesX, tilesY, tileW, tileH };
+}
+
+// ---------------------------------------------------------------------------
+// MAP##.BIN parsing
+//
+// Header is 14 bytes (7 x u16), confirmed by exact byte-for-byte match
+// against a known-correct reference render: render width, render height,
+// tile grid width, tile grid height, atlas tile width, atlas tile height,
+// atlas tiles-per-row. Tile records (6 bytes each: zero, terrain, flag)
+// start immediately after, with zero padding -- (filesize - 14) divides
+// evenly by 6 with no remainder for every file checked so far. An earlier
+// 32-byte assumption was wrong: it happened to produce a recognizable-looking
+// image because most of the extra 18 bytes decoded into plausible small
+// values, but it silently dropped the grid 3 tile-columns out of alignment
+// (visible as a void-color band at one edge and a matching gap at the
+// other), only caught by diffing against a verified-correct reference.
+// ---------------------------------------------------------------------------
+function parseMapBin(buf) {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 14) throw new Error('file too small to contain the expected 14-byte header');
+  const renderW = dv.getUint16(0, true);
+  const renderH = dv.getUint16(2, true);
+  const tileW = dv.getUint16(4, true);
+  const tileH = dv.getUint16(6, true);
+
+  if (tileW === 0 || tileH === 0 || tileW > 4096 || tileH > 4096) {
+    throw new Error(`header tile grid (${tileW}x${tileH}) looks implausible -- this may not be a recognized MAP##.BIN layout`);
+  }
+
+  const off = 14;
+  const recordSize = 6;
+  const maxRecords = Math.floor((buf.byteLength - off) / recordSize);
+  const wantedRecords = tileW * tileH;
+  const n = Math.min(maxRecords, wantedRecords);
+
+  const tiles = [];
+  for (let i = 0; i < n; i++) {
+    const base = off + i * recordSize;
+    const zero = dv.getUint16(base, true);
+    const terrain = dv.getUint16(base + 2, true);
+    const flag = dv.getUint16(base + 4, true);
+    tiles.push({ x: i % tileW, y: Math.floor(i / tileW), terrain, flag });
+  }
+
+  state.tiles = tiles;
+  state.tileW = tileW;
+  state.tileH = tileH;
+  state.renderW = renderW;
+  state.renderH = renderH;
+
+  // build legend colors (HSV wheel over distinct terrain values), preserve any
+  // existing user-entered names if terrain set is unchanged
+  const uniq = Array.from(new Set(tiles.map(t => t.terrain))).sort((a,b) => a-b);
+  const colors = {};
+  uniq.forEach((v, i) => {
+    const hue = i / Math.max(1, uniq.length);
+    colors[v] = hsvToRgb(hue, 0.75, 0.92);
+  });
+  state.legendColors = colors;
+  if (!state.legendNamesInit) {
+    state.legendNames = {};
+    uniq.forEach(v => { state.legendNames[v] = `terrain ${v}`; });
+    state.legendNamesInit = true;
+  }
+}
+
+function hsvToRgb(h, s, v) {
+  let r, g, b;
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  switch (i % 6) {
+    case 0: r=v; g=t; b=p; break;
+    case 1: r=q; g=v; b=p; break;
+    case 2: r=p; g=v; b=t; break;
+    case 3: r=p; g=q; b=v; break;
+    case 4: r=t; g=p; b=v; break;
+    case 5: r=v; g=p; b=q; break;
+  }
+  return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+}
+
+// ---------------------------------------------------------------------------
+// Workbench init / rendering
+// ---------------------------------------------------------------------------
+function initWorkbench() {
+  $('#toolbar').style.display = 'flex';
+  $('#tabs').style.display = 'flex';
+
+  const view = $('#view-overlay');
+  view.innerHTML = `
+    <div class="overlay-layout">
+      <div class="canvas-pane" id="canvasPane">
+        <div class="canvas-viewport" id="canvasViewport">
+          <div class="canvas-wrap" id="canvasWrap">
+            <canvas id="baseCanvas"></canvas>
+            <canvas id="overlayCanvas"></canvas>
+          </div>
+        </div>
+        <div class="pan-controls">
+          <span></span><button data-pan="up" title="Pan up (W / &uarr;)">&uarr;</button><span></span>
+          <button data-pan="left" title="Pan left (A / &larr;)">&larr;</button>
+          <button class="center" data-pan="reset" title="Reset view">&#8634;</button>
+          <button data-pan="right" title="Pan right (D / &rarr;)">&rarr;</button>
+          <span></span><button data-pan="down" title="Pan down (S / &darr;)">&darr;</button><span></span>
+        </div>
+        <div class="zoom-controls">
+          <button data-zoom="out" title="Zoom out">&minus;</button>
+          <span class="zoomval" id="zoomVal">100%</span>
+          <button data-zoom="in" title="Zoom in">&plus;</button>
+        </div>
+      </div>
+      <div class="side-pane">
+        <div class="side-section">
+          <h3>Corner handles (default calibration)</h3>
+          <div style="font-size:10.5px; color:var(--ink-faint); line-height:1.6; margin-bottom:10px;">
+            Four handles start pinned to the image's actual corners -- <b style="color:var(--ink-dim);">TL/TR/BR/BL</b>. Drag any handle independently to the matching diamond tip on the screenshot; the overlay is warped to fit exactly those 4 points, so moving one corner never distorts the others.
+          </div>
+          <button id="resetHandlesBtn" style="width:100%; margin-bottom:14px;">Reset handles to image corners</button>
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); margin-bottom:6px;">Move all 4 handles together</div>
+          <div class="move-pad-row">
+            <div class="move-pad">
+              <span></span><button data-quad-move="up" title="Nudge up (Alt+&uarr;, Shift for bigger step)">&uarr;</button><span></span>
+              <button data-quad-move="left" title="Nudge left (Alt+&larr;, Shift for bigger step)">&larr;</button>
+              <span class="move-pad-center"></span>
+              <button data-quad-move="right" title="Nudge right (Alt+&rarr;, Shift for bigger step)">&rarr;</button>
+              <span></span><button data-quad-move="down" title="Nudge down (Alt+&darr;, Shift for bigger step)">&darr;</button><span></span>
+            </div>
+            <div style="font-size:10px; color:var(--ink-faint); line-height:1.5;">
+              Moves the whole overlay without changing its size, shape, or rotation. Click for a small step, hold Shift for a bigger one, or hold the button to repeat. Same shortcuts work with Alt+arrow keys.
+            </div>
+          </div>
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); margin:14px 0 6px 0;">Rotate all 4 handles together</div>
+          <div class="rot-snap-row">
+            <button data-quad-rot="-90" title="Turn left 90&deg;">&#8634; 90&deg;</button>
+            <button data-quad-rot="90" title="Turn right 90&deg;">90&deg; &#8635;</button>
+            <button data-quad-rot="180" title="Turn 180&deg;">180&deg;</button>
+          </div>
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); margin:14px 0 6px 0;">Handle positions (editable)</div>
+          <div class="handle-readout" id="handleReadout"></div>
+          <div style="display:flex; gap:6px; margin-top:8px;">
+            <button id="saveCalibBtn" style="flex:1; font-size:10.5px;">Save calibration</button>
+            <button id="loadCalibBtn" style="flex:1; font-size:10.5px;">Load calibration</button>
+          </div>
+          <input type="file" id="calibFileInput" accept=".json" style="display:none;">
+        </div>
+        <div class="side-section">
+          <h3>Background image</h3>
+          <label class="drop-label" for="pngInputSide" style="display:block; text-align:center;">${state.img ? 'Replace screenshot…' : 'Add screenshot or MAP##.MAP…'}</label>
+          <input type="file" id="pngInputSide" accept=".png,.jpg,.jpeg,.gif,.webp,.map">
+          <div style="font-size:10.5px; color:var(--ink-faint); margin-top:8px; line-height:1.5;">${state.img ? 'A raw MAP##.MAP file is decoded automatically (RGB555 tile atlas, no conversion needed).' : 'Working from tile data alone -- canvas is set to 2048&times;1536, the known size of this map\'s reference screenshot. Drop a screenshot, or the raw MAP##.MAP file itself -- it decodes automatically.'}</div>
+        </div>
+        <div class="side-section">
+          <h3>Cursor</h3>
+          <div class="hover-info" id="hoverInfo">Hover the image to read tile values.</div>
+        </div>
+        <div class="side-section" style="flex:1;">
+          <h3>Terrain key (click to rename, swatch to toggle)</h3>
+          <div class="legend-list" id="legendList"></div>
+        </div>
+      </div>
+    </div>
+  `;
+  $('#emptyState') && ($('#emptyState').style.display = 'none');
+
+  setupCanvases();
+  renderLegend();
+  renderAll();
+  wireCalibrationControls();
+  wirePanZoomControls();
+  wireHandleDragging();
+  applyViewTransform();
+
+  // place handles AFTER applyViewTransform/layout so canvasW/H are final;
+  // if handles were already placed before (e.g. re-init after replacing the
+  // image), leave them exactly where they are -- they're already in
+  // canvas-pixel space and don't need to move just because the background
+  // image changed underneath them.
+  if (state.calibInitialized) {
+    renderHandles();
+    markHomographyDirty();
+    renderOverlay();
+  } else {
+    placeDefaultHandles();
+    state.calibInitialized = true;
+  }
+
+  $('#pngInputSide').addEventListener('change', e => { if (e.target.files[0]) loadImageOrMap(e.target.files[0]); });
+  $('#resetHandlesBtn').addEventListener('click', resetHandlesToDefault);
+  $('#saveCalibBtn').addEventListener('click', saveCalibration);
+  $('#loadCalibBtn').addEventListener('click', () => $('#calibFileInput').click());
+  $('#calibFileInput').addEventListener('change', e => { if (e.target.files[0]) loadCalibrationFile(e.target.files[0]); });
+}
+
+function setupCanvases() {
+  const w = state.canvasW, h = state.canvasH;
+  const base = $('#baseCanvas');
+  const overlay = $('#overlayCanvas');
+  [base, overlay].forEach(c => { c.width = w; c.height = h; });
+  $('#canvasWrap').style.width = w + 'px';
+  $('#canvasWrap').style.height = h + 'px';
+
+  const bctx = base.getContext('2d');
+  bctx.clearRect(0, 0, w, h);
+  if (state.img) {
+    bctx.drawImage(state.img, 0, 0, w, h);
+  } else {
+    bctx.fillStyle = '#1a1f15';
+    bctx.fillRect(0, 0, w, h);
+    bctx.strokeStyle = '#2c3424';
+    bctx.lineWidth = 1;
+    for (let x = 0; x < w; x += 64) { bctx.beginPath(); bctx.moveTo(x,0); bctx.lineTo(x,h); bctx.stroke(); }
+    for (let y = 0; y < h; y += 64) { bctx.beginPath(); bctx.moveTo(0,y); bctx.lineTo(w,y); bctx.stroke(); }
+  }
+
+  overlay.addEventListener('mousemove', onCanvasHover);
+  overlay.addEventListener('mouseleave', () => { state.hoverTile = null; $('#hoverInfo').textContent = 'Hover the image to read tile values.'; renderOverlay(); });
+}
+
+// Isometric tile -> screen center, standard diamond projection with rotation.
+// Rotation pivots around the CENTER of the tile grid (like spinning a mousepad
+// in place), not around tile (0,0) -- so `origin` represents where the grid's
+// center sits on screen, and every tile's offset is measured from that center
+// before rotation is applied.
+// Rotation sign convention: positive degrees turns the overlay LEFT
+// (counter-clockwise as seen on screen). Canvas Y increases downward, so to
+// get a visually counter-clockwise turn from a positive angle we apply the
+// rotation matrix with a flipped sign versus the standard math convention.
+// ---------------------------------------------------------------------------
+// Homography (perspective quad warp): the 4 corner handles can each be
+// dragged completely independently, so the mapping from tile-space to
+// screen-space is a full projective transform solved fresh from whichever
+// 4 points the handles are currently at -- not a rigid origin/scale/rotation
+// model. This is what makes corner-dragging artifact-free: moving one corner
+// never silently distorts the others, and there is no separate "rotation"
+// or "scale" number that can fall out of sync with where the handles
+// actually are.
+let homography = null;       // 3x3 matrix, tile-space -> screen-space
+let homographyInv = null;    // its inverse, screen-space -> tile-space
+let homographyDirty = true;
+
+function solve3x3Linear(A, b) {
+  const n = A.length;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
+    [M[col], M[pivot]] = [M[pivot], M[col]];
+    const pv = M[col][col];
+    if (Math.abs(pv) < 1e-9) return null;
+    for (let c = col; c <= n; c++) M[col][c] /= pv;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r][col];
+      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+  return M.map(row => row[n]);
+}
+
+function computeHomography(src, dst) {
+  // src, dst: 4x [x,y]. Returns 3x3 matrix mapping src -> dst in homogeneous
+  // coords, or null if the 4 points are degenerate (collinear/duplicate).
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i];
+    const [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  const h = solve3x3Linear(A, b);
+  if (!h) return null;
+  return [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1]];
+}
+
+function invert3x3(M) {
+  const [[a,b,c],[d,e,f],[g,h,i]] = M;
+  const A =  (e*i - f*h), B = -(d*i - f*g), C =  (d*h - e*g);
+  const D = -(b*i - c*h), E =  (a*i - c*g), F = -(a*h - b*g);
+  const Gc = (b*f - c*e), Hc = -(a*f - c*d), I =  (a*e - b*d);
+  const det = a*A + b*B + c*C;
+  if (Math.abs(det) < 1e-12) return null;
+  return [[A/det, D/det, Gc/det], [B/det, E/det, Hc/det], [C/det, F/det, I/det]];
+}
+
+function applyHomography(H, x, y) {
+  const w = H[2][0]*x + H[2][1]*y + H[2][2];
+  return [(H[0][0]*x + H[0][1]*y + H[0][2]) / w, (H[1][0]*x + H[1][1]*y + H[1][2]) / w];
+}
+
+function rebuildHomographyIfNeeded() {
+  if (!homographyDirty) return;
+  const { top, right, bottom, left } = handlePositions;
+  if (!top || !right || !bottom || !left) { homography = null; homographyInv = null; return; }
+  const src = [resolveTile(HANDLE_DEFS[0].tile), resolveTile(HANDLE_DEFS[1].tile), resolveTile(HANDLE_DEFS[2].tile), resolveTile(HANDLE_DEFS[3].tile)];
+  const dst = [top, right, bottom, left];
+  homography = computeHomography(src, dst);
+  homographyInv = homography ? invert3x3(homography) : null;
+  homographyDirty = false;
+}
+
+function markHomographyDirty() { homographyDirty = true; }
+
+function tileToScreen(tx, ty) {
+  rebuildHomographyIfNeeded();
+  if (!homography) return [0, 0];
+  return applyHomography(homography, tx, ty);
+}
+
+function screenToTile(sx, sy) {
+  rebuildHomographyIfNeeded();
+  if (!homographyInv) return [0, 0];
+  const [tx, ty] = applyHomography(homographyInv, sx, sy);
+  return [Math.round(tx), Math.round(ty)];
+}
+
+function renderAll() {
+  if (!state.img || !state.tiles.length) return;
+  renderOverlay();
+}
+
+function renderOverlay() {
+  const canvas = $('#overlayCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.globalAlpha = state.opacity;
+
+  // Each tile is a diamond in TILE space. Its 4 corners are the surrounding
+  // grid-line intersections (tx-0.5,ty-0.5), (tx+0.5,ty-0.5), (tx+0.5,ty+0.5),
+  // (tx-0.5,ty+0.5) -- NOT offsets along the cardinal iso directions, which
+  // would collapse into a degenerate sliver. Warping these 4 points
+  // individually through the homography draws exactly the right shape for
+  // whatever quad the handles currently describe -- no separate rotation
+  // number, so it can never drift out of sync with a skewed/perspective fit.
+  function tileCornersScreen(tx, ty) {
+    return [
+      tileToScreen(tx - 0.5, ty - 0.5),
+      tileToScreen(tx + 0.5, ty - 0.5),
+      tileToScreen(tx + 0.5, ty + 0.5),
+      tileToScreen(tx - 0.5, ty + 0.5),
+    ];
+  }
+
+  function drawDiamondAt(tx, ty) {
+    const pts = tileCornersScreen(tx, ty);
+    ctx.beginPath();
+    pts.forEach(([px, py], i) => { if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+    ctx.closePath();
+  }
+
+  for (const t of state.tiles) {
+    if (state.hiddenTerrains.has(t.terrain)) continue;
+    const [cx, cy] = tileToScreen(t.x, t.y);
+    if (cx < -40 || cx > canvas.width + 40 || cy < -40 || cy > canvas.height + 40) continue;
+    const [r,g,b] = state.legendColors[t.terrain] || [128,128,128];
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    drawDiamondAt(t.x, t.y);
+    ctx.fill();
+    if (t.flag !== 0) {
+      ctx.globalAlpha = Math.min(1, state.opacity + 0.35);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.globalAlpha = state.opacity;
+    }
+  }
+
+  // hover highlight
+  if (state.hoverTile) {
+    const [hx, hy] = state.hoverTile;
+    const tile = state.tiles.find(t => t.x === hx && t.y === hy);
+    if (tile) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      drawDiamondAt(hx, hy);
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function onCanvasHover(e) {
+  const rect = e.target.getBoundingClientRect();
+  // rect already reflects pan+zoom (it's a transformed element), so this
+  // division by rect size to canvas pixel size is correct regardless of zoom
+  const scaleX = e.target.width / rect.width;
+  const scaleY = e.target.height / rect.height;
+  const sx = (e.clientX - rect.left) * scaleX;
+  const sy = (e.clientY - rect.top) * scaleY;
+  const [tx, ty] = screenToTile(sx, sy);
+  const tile = state.tiles.find(t => t.x === tx && t.y === ty);
+  state.hoverTile = [tx, ty];
+  if (tile) {
+    const [r,g,b] = state.legendColors[tile.terrain] || [128,128,128];
+    const name = state.legendNames[tile.terrain] || `terrain ${tile.terrain}`;
+    $('#hoverInfo').innerHTML = `
+      <b>tile (${tx}, ${ty})</b><br>
+      <span class="swatch" style="background:rgb(${r},${g},${b})"></span>${escapeHtml(name)} (value ${tile.terrain})<br>
+      flag: ${tile.flag}${tile.flag !== 0 ? ' <span style="color:var(--warn)">(special zone)</span>' : ''}
+    `;
+  } else {
+    $('#hoverInfo').innerHTML = `<b>tile (${tx}, ${ty})</b><br><span style="color:var(--ink-faint)">no data (outside grid)</span>`;
+  }
+  renderOverlay();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------------------------------------------------------------------------
+// Legend
+// ---------------------------------------------------------------------------
+function renderLegend() {
+  const list = $('#legendList');
+  if (!list) return;
+  const counts = {};
+  state.tiles.forEach(t => { counts[t.terrain] = (counts[t.terrain]||0)+1; });
+  const entries = Object.keys(state.legendColors).map(k => parseInt(k,10)).sort((a,b)=>a-b);
+
+  list.innerHTML = entries.map(v => {
+    const [r,g,b] = state.legendColors[v];
+    const hidden = state.hiddenTerrains.has(v);
+    return `<div class="legend-item ${hidden?'hidden-layer':''}" data-val="${v}">
+      <span class="swatch" style="background:rgb(${r},${g},${b})" data-toggle="${v}" title="click to show/hide"></span>
+      <span class="lbl"><input type="text" value="${escapeHtml(state.legendNames[v]||('terrain '+v))}" data-rename="${v}"></span>
+      <span class="cnt">${counts[v]||0}</span>
+    </div>`;
+  }).join('');
+
+  $$('#legendList [data-toggle]').forEach(el => {
+    el.addEventListener('click', () => {
+      const v = parseInt(el.dataset.toggle, 10);
+      if (state.hiddenTerrains.has(v)) state.hiddenTerrains.delete(v);
+      else state.hiddenTerrains.add(v);
+      renderLegend();
+      renderOverlay();
+    });
+  });
+  $$('#legendList [data-rename]').forEach(el => {
+    el.addEventListener('change', () => {
+      const v = parseInt(el.dataset.rename, 10);
+      state.legendNames[v] = el.value;
+      toast(`Renamed terrain ${v} -> "${el.value}"`);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Corner handles: 4 always-visible, always-draggable handles at the diamond
+// tips (tile (0,0), (W,0), (W,H), (0,H)). Default position is the image's
+// actual 4 corners. Dragging any handle re-solves origin/scale/rotation from
+// the CURRENT positions of all 4 handles -- this is the single calibration
+// pathway (manual sliders reposition handles too, see repositionHandlesFromCalib),
+// so there is no separate code path that can drift out of sync or compose
+// scale/rotation in the wrong order.
+// ---------------------------------------------------------------------------
+const HANDLE_DEFS = [
+  { key: 'top',    tile: [0, 0],                                   label: 'TL' },
+  { key: 'right',  tile: [() => state.tileW, 0],                   label: 'TR' },
+  { key: 'bottom', tile: [() => state.tileW, () => state.tileH],   label: 'BR' },
+  { key: 'left',   tile: [0, () => state.tileH],                   label: 'BL' },
+];
+let handlePositions = {}; // key -> [canvasX, canvasY]
+let handleDrag = null;     // key currently being dragged, or null
+
+function resolveTile(spec) {
+  return spec.map(v => typeof v === 'function' ? v() : v);
+}
+
+function defaultHandlePositions() {
+  // Default: the image's actual 4 corners in canvas-pixel space, shifted by
+  // half a tile in both axes. The tile overlay draws each tile centered on
+  // its (x,y) coordinate, but the underlying render anchors each tile by a
+  // corner -- so a half-tile offset is needed for the grid's outer edge to
+  // land on the image's actual edge, not half a tile short of it. Computed
+  // from the real per-tile pixel size (canvas size / tile grid size) rather
+  // than a fixed constant, so it stays correct for maps with different tile
+  // pixel dimensions. Confirmed against a reference image where the correct
+  // top-left handle position was (16, 8) -- exactly half of a 32x16px tile.
+  const w = state.canvasW, h = state.canvasH;
+  const halfTileX = state.tileW ? (w / state.tileW) / 2 : 0;
+  const halfTileY = state.tileH ? (h / state.tileH) / 2 : 0;
+  return {
+    top: [halfTileX, halfTileY],
+    right: [w + halfTileX, halfTileY],
+    bottom: [w + halfTileX, h + halfTileY],
+    left: [halfTileX, h + halfTileY],
+  };
+}
+
+function placeDefaultHandles() {
+  handlePositions = defaultHandlePositions();
+  markHomographyDirty();
+  renderHandles();
+  renderOverlay();
+}
+
+function renderHandles() {
+  $$('.pin-marker').forEach(el => el.remove());
+  const wrap = $('#canvasWrap');
+  if (!wrap) return;
+  HANDLE_DEFS.forEach(def => {
+    const pos = handlePositions[def.key];
+    if (!pos) return;
+    const marker = document.createElement('div');
+    marker.className = 'pin-marker';
+    marker.dataset.handle = def.key;
+    marker.style.left = pos[0] + 'px';
+    marker.style.top = pos[1] + 'px';
+    marker.innerHTML = `<span class="pin-label">${def.label}</span>`;
+    marker.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleDrag = def.key;
+      marker.classList.add('dragging');
+    });
+    wrap.appendChild(marker);
+  });
+  renderHandleReadout();
+}
+
+// Live numeric readout of each handle's exact canvas-pixel position --
+// useful for diagnosing alignment by exact numbers instead of by eye, and
+// for reproducing/comparing a calibration across sessions.
+function renderHandleReadout() {
+  const el = $('#handleReadout');
+  if (!el) return;
+  // Avoid clobbering an input the user is actively typing into -- only
+  // rebuild from scratch when nothing in this panel has focus.
+  if (el.contains(document.activeElement)) return;
+  const rows = HANDLE_DEFS.map(def => {
+    const pos = handlePositions[def.key] || [0, 0];
+    return `<div class="hr-row">
+      <span class="hr-key">${def.label}</span>
+      <span class="hr-inputs">
+        <input type="number" class="hr-num" data-handle-coord="${def.key}" data-axis="x" value="${Math.round(pos[0])}">
+        <input type="number" class="hr-num" data-handle-coord="${def.key}" data-axis="y" value="${Math.round(pos[1])}">
+      </span>
+    </div>`;
+  }).join('');
+  el.innerHTML = rows;
+
+  $$('#handleReadout [data-handle-coord]').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const key = inp.dataset.handleCoord;
+      const axis = inp.dataset.axis;
+      const val = parseFloat(inp.value);
+      if (isNaN(val) || !handlePositions[key]) return;
+      const pos = handlePositions[key];
+      handlePositions[key] = axis === 'x' ? [val, pos[1]] : [pos[0], val];
+      markHomographyDirty();
+      const marker = document.querySelector(`.pin-marker[data-handle="${key}"]`);
+      if (marker) { marker.style.left = handlePositions[key][0] + 'px'; marker.style.top = handlePositions[key][1] + 'px'; }
+      renderOverlay();
+    });
+  });
+}
+
+function canvasPointFromEvent(e) {
+  const canvas = $('#overlayCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return [(e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY];
+}
+
+function wireHandleDragging() {
+  window.addEventListener('mousemove', (e) => {
+    if (!handleDrag) return;
+    const [cx, cy] = canvasPointFromEvent(e);
+    handlePositions[handleDrag] = [cx, cy];
+    const marker = document.querySelector(`.pin-marker[data-handle="${handleDrag}"]`);
+    if (marker) { marker.style.left = cx + 'px'; marker.style.top = cy + 'px'; }
+    // Each handle is independent -- moving one only changes that corner of
+    // the warp, the other three stay exactly where they were dragged to.
+    markHomographyDirty();
+    renderOverlay();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!handleDrag) return;
+    const marker = document.querySelector(`.pin-marker[data-handle="${handleDrag}"]`);
+    if (marker) marker.classList.remove('dragging');
+    handleDrag = null;
+  });
+}
+
+function resetHandlesToDefault() {
+  placeDefaultHandles();
+  toast('Corner handles reset to the image\u2019s default corners');
+}
+
+// Save/load the 4 handle positions as a small JSON file -- so a calibration
+// nailed down for a particular screenshot (e.g. correcting for that image's
+// own capture-margin/letterboxing) can be reapplied instantly next time,
+// instead of re-dragging or re-typing it from scratch.
+function saveCalibration() {
+  const { top, right, bottom, left } = handlePositions;
+  if (!top || !right || !bottom || !left) { toast('No handle positions to save', true); return; }
+  const payload = {
+    tool: 'map-overlay-workbench', version: 1,
+    canvasW: state.canvasW, canvasH: state.canvasH,
+    handles: { top, right, bottom, left },
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'overlay-calibration.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  toast('Saved overlay-calibration.json');
+}
+
+function loadCalibrationFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const payload = JSON.parse(reader.result);
+      const h = payload.handles;
+      if (!h || !h.top || !h.right || !h.bottom || !h.left) throw new Error('missing handle data');
+      if (payload.canvasW && payload.canvasW !== state.canvasW) {
+        toast(`Note: saved calibration was for a ${payload.canvasW}\u00d7${payload.canvasH} canvas, current is ${state.canvasW}\u00d7${state.canvasH} -- positions may not line up`);
+      }
+      handlePositions = { top: h.top, right: h.right, bottom: h.bottom, left: h.left };
+      markHomographyDirty();
+      renderHandles();
+      renderOverlay();
+      toast('Loaded calibration from ' + file.name);
+    } catch (e) {
+      toast('Could not load calibration: ' + e.message, true);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Rotate all 4 handles together as a rigid group, pivoting around their
+// current center -- a convenience for "just turn the whole thing N degrees"
+// without giving up independent per-corner dragging the rest of the time.
+function rotateHandlesGroup(degrees) {
+  const { top, right, bottom, left } = handlePositions;
+  if (!top || !right || !bottom || !left) return;
+  const cx = (top[0] + right[0] + bottom[0] + left[0]) / 4;
+  const cy = (top[1] + right[1] + bottom[1] + left[1]) / 4;
+  const rad = -degrees * Math.PI / 180; // negative = turning left for positive degrees, matching prior convention
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  HANDLE_DEFS.forEach(def => {
+    const [px, py] = handlePositions[def.key];
+    const dx = px - cx, dy = py - cy;
+    handlePositions[def.key] = [cx + dx*cos - dy*sin, cy + dx*sin + dy*cos];
+  });
+  markHomographyDirty();
+  renderHandles();
+  renderOverlay();
+}
+
+// Move all 4 handles together by the same screen-pixel offset, preserving
+// their exact shape/scale/rotation relative to each other -- for nudging
+// the whole overlay into place once its size and orientation are already
+// correct, without risking re-distorting individual corners.
+function translateHandlesGroup(dx, dy) {
+  const { top, right, bottom, left } = handlePositions;
+  if (!top || !right || !bottom || !left) return;
+  HANDLE_DEFS.forEach(def => {
+    const [px, py] = handlePositions[def.key];
+    handlePositions[def.key] = [px + dx, py + dy];
+  });
+  markHomographyDirty();
+  renderHandles();
+  renderOverlay();
+}
+
+// ---------------------------------------------------------------------------
+// Corner handle group actions (reset, rotate-as-a-group, move-as-a-group)
+// ---------------------------------------------------------------------------
+function wireCalibrationControls() {
+  $$('[data-quad-rot]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      rotateHandlesGroup(parseFloat(btn.dataset.quadRot));
+    });
+  });
+
+  // Single source of truth for the move-pad: mousedown does one immediate
+  // step, then repeats on hold after a short delay. There is deliberately
+  // no separate 'click' handler here -- click and mousedown both fire on a
+  // normal click, and having both wired was causing every click to move
+  // the overlay twice (once from each handler), which is the most likely
+  // explanation for needing extra clicks to "catch up" to alignment.
+  let repeatTimer = null;
+  let repeatDelay = null;
+  function doMove(btn, shiftKey) {
+    const step = shiftKey ? 20 : 4;
+    const [dx, dy] = { up:[0,-step], down:[0,step], left:[-step,0], right:[step,0] }[btn.dataset.quadMove];
+    translateHandlesGroup(dx, dy);
+  }
+  function stopRepeat() {
+    clearTimeout(repeatDelay);
+    clearInterval(repeatTimer);
+    repeatDelay = null;
+    repeatTimer = null;
+  }
+  $$('[data-quad-move]').forEach(btn => {
+    btn.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      stopRepeat();
+      doMove(btn, e.shiftKey);
+      // wait before auto-repeating, so a quick click never double-moves
+      repeatDelay = setTimeout(() => {
+        repeatTimer = setInterval(() => doMove(btn, e.shiftKey), 90);
+      }, 350);
+    });
+  });
+  window.addEventListener('mouseup', stopRepeat);
+  window.addEventListener('mouseleave', stopRepeat);
+
+  // keyboard nudging: Alt+arrow keys move the whole overlay (plain arrows
+  // are already used for camera panning, so Alt disambiguates intent)
+  document.addEventListener('keydown', (e) => {
+    if (!e.altKey) return;
+    if (!$('#view-overlay') || !$('#view-overlay').classList.contains('active')) return;
+    if (document.activeElement && ['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) return;
+    const step = e.shiftKey ? 20 : 4;
+    let handled = true;
+    switch (e.key) {
+      case 'ArrowUp': translateHandlesGroup(0, -step); break;
+      case 'ArrowDown': translateHandlesGroup(0, step); break;
+      case 'ArrowLeft': translateHandlesGroup(-step, 0); break;
+      case 'ArrowRight': translateHandlesGroup(step, 0); break;
+      default: handled = false;
+    }
+    if (handled) e.preventDefault();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Pan / zoom (camera over the canvas -- never touches tile math)
+// ---------------------------------------------------------------------------
+function applyViewTransform() {
+  const wrap = $('#canvasWrap');
+  if (!wrap) return;
+  const { panX, panY, zoom } = state.view;
+  wrap.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  const zv = $('#zoomVal');
+  if (zv) zv.textContent = Math.round(zoom * 100) + '%';
+}
+
+function panBy(dx, dy) {
+  state.view.panX += dx;
+  state.view.panY += dy;
+  applyViewTransform();
+}
+
+function zoomBy(factor) {
+  state.view.zoom = Math.max(0.1, Math.min(4, state.view.zoom * factor));
+  applyViewTransform();
+}
+
+function resetView() {
+  const pane = $('#canvasPane');
+  const w = state.canvasW, h = state.canvasH;
+  const fitZoom = Math.min(pane.clientWidth / w, pane.clientHeight / h, 1);
+  state.view.zoom = fitZoom;
+  state.view.panX = (pane.clientWidth - w * fitZoom) / 2;
+  state.view.panY = (pane.clientHeight - h * fitZoom) / 2;
+  applyViewTransform();
+}
+
+function wirePanZoomControls() {
+  const PAN_STEP = 80;
+  $$('[data-pan]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dir = btn.dataset.pan;
+      if (dir === 'up') panBy(0, PAN_STEP);
+      else if (dir === 'down') panBy(0, -PAN_STEP);
+      else if (dir === 'left') panBy(PAN_STEP, 0);
+      else if (dir === 'right') panBy(-PAN_STEP, 0);
+      else if (dir === 'reset') resetView();
+    });
+  });
+  $$('[data-zoom]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      zoomBy(btn.dataset.zoom === 'in' ? 1.25 : 0.8);
+    });
+  });
+
+  // keyboard panning -- WASD and arrow keys, only while the overlay view is
+  // active. Alt+arrow is reserved for nudging the overlay itself (see
+  // wireCalibrationControls), so this handler ignores Alt-modified keys.
+  document.addEventListener('keydown', (e) => {
+    if (!$('#view-overlay').classList.contains('active')) return;
+    if (document.activeElement && ['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) return;
+    if (e.altKey) return;
+    const STEP = e.shiftKey ? 200 : 80;
+    let handled = true;
+    switch (e.key) {
+      case 'w': case 'W': case 'ArrowUp': panBy(0, STEP); break;
+      case 's': case 'S': case 'ArrowDown': panBy(0, -STEP); break;
+      case 'a': case 'A': case 'ArrowLeft': panBy(STEP, 0); break;
+      case 'd': case 'D': case 'ArrowRight': panBy(-STEP, 0); break;
+      case '+': case '=': zoomBy(1.15); break;
+      case '-': case '_': zoomBy(0.87); break;
+      case '0': resetView(); break;
+      default: handled = false;
+    }
+    if (handled) e.preventDefault();
+  });
+
+  // click-drag panning on the viewport
+  const viewport = $('#canvasViewport');
+  let dragging = false, lastX = 0, lastY = 0;
+  viewport.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    viewport.classList.add('grabbing');
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    panBy(e.clientX - lastX, e.clientY - lastY);
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  window.addEventListener('mouseup', () => { dragging = false; viewport.classList.remove('grabbing'); });
+
+  // scroll wheel zoom, centered on cursor
+  viewport.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = viewport.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const before = state.view.zoom;
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    const after = Math.max(0.1, Math.min(4, before * factor));
+    // keep the point under the cursor stationary while zooming
+    state.view.panX = mx - (mx - state.view.panX) * (after / before);
+    state.view.panY = my - (my - state.view.panY) * (after / before);
+    state.view.zoom = after;
+    applyViewTransform();
+  }, { passive: false });
+
+  resetView();
+}
+
+// ---------------------------------------------------------------------------
+// Drag/drop wiring helper
+// ---------------------------------------------------------------------------
+function wireDropZone(id, handler, accept) {
+  const dz = document.getElementById(id);
+  if (!dz) return;
+  ['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('over'); }));
+  dz.addEventListener('drop', e => { if (e.dataTransfer.files[0]) handler(e.dataTransfer.files[0]); });
+  dz.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept || '*';
+    input.onchange = () => { if (input.files[0]) handler(input.files[0]); };
+    input.click();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+function exportOverlayPng() {
+  const w = state.canvasW, h = state.canvasH;
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage($('#baseCanvas'), 0, 0);
+  ctx.drawImage($('#overlayCanvas'), 0, 0);
+  canvas.toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'map-overlay.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('Exported map-overlay.png');
+  });
+}
+
+function exportKeyCsv() {
+  let csv = 'x,y,terrain_value,terrain_label,flag\n';
+  state.tiles.forEach(t => {
+    const label = (state.legendNames[t.terrain]||'').replace(/"/g,'""');
+    csv += `${t.x},${t.y},${t.terrain},"${label}",${t.flag}\n`;
+  });
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'map-tile-key.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  toast('Exported map-tile-key.csv');
+}
+
+// ---------------------------------------------------------------------------
+// Docs
+// ---------------------------------------------------------------------------
+const DOCS_HTML = `
+<h1>How the overlay works</h1>
+<div class="docs-sub">What's parsed, what's assumed, and why calibration is manual.</div>
+
+<h2>MAP##.BIN layout</h2>
+<p>The file opens with a 14-byte header (7 x u16): render width, render height, tile grid width, tile grid height, atlas tile width, atlas tile height, and atlas tiles-per-row. After the header, one 6-byte record per tile, with zero padding: a constant zero (u16), a terrain/feature-type value (u16, typically a small set of distinct values), and a flag byte (u16, almost always 0, with rare 1/2/3 values marking special zones such as start points, retreat zones, or enemy entry points). Tiles are stored row-major, left-to-right then top-to-bottom. <code>(filesize - 14) / 6</code> divides evenly with no remainder for every file checked so far -- a useful sanity check if a new map ever looks misaligned.</p>
+<div class="callout">
+<b>Correction history:</b> an earlier version of this tool assumed a 32-byte header. It produced a recognizable-looking image, since most of the extra 18 bytes happened to decode into plausible small terrain values, but it silently dropped the whole grid 3 tile-columns out of alignment -- visible as a solid void-color band along one edge and a matching gap at the opposite edge. The error only became clear once a render was diffed directly against an independently-confirmed-correct reference image. If an overlay ever looks shifted by a small, constant, rectangular amount again, re-checking the header size against a fresh reference is the first thing to try.
+</div>
+
+<h2>Calibrating the overlay</h2>
+<p>The tile grid has no embedded screen-space coordinates -- the header gives a render resolution, but a screenshot may be a cropped or zoomed view of only part of the full map, and the projection (an isometric diamond grid) has unknown per-map origin, scale, and camera rotation.</p>
+<p>Four <b>corner handles</b> default to the image's actual corners (TL/TR/BR/BL) and are draggable independently. The overlay is warped to fit exactly wherever the four handles currently sit, using a full perspective transform (a homography) rather than a rigid origin/scale/rotation model -- so dragging one handle never distorts or skews the other three, and there's no separate "rotation" number that can fall out of sync with where the handles actually are. Drag each handle to the matching diamond tip on your screenshot for a pixel-accurate fit.</p>
+<p>Once size and rotation look right but the whole overlay needs to shift slightly, use "Move all 4 handles together" to nudge it in any direction without touching scale or rotation -- click the d-pad for a small step, hold Shift for a bigger one, hold the button down to repeat, or use Alt+arrow keys (Shift+Alt+arrow for the bigger step). Plain arrow keys are reserved for panning the camera, so Alt disambiguates "move the overlay" from "move my view of it."</p>
+<p>A "rotate all 4 handles together" action (90&deg; left/right, 180&deg;) is available for quickly reorienting the whole quad as a rigid group before fine-tuning individual corners -- useful since many isometric engines store tile data in a different orientation than a given screenshot's camera angle. "Reset handles to image corners" restores the default rectangle at any time.</p>
+
+<h2>Default canvas size</h2>
+<p>The canvas opens at 2048&times;1536 by default, matching the known reference screenshot for this map, so the tool is usable immediately from just a MAP##.BIN file -- no image required. Adding a screenshot afterward (via the side panel or toolbar) replaces the placeholder grid background and resizes the canvas to the image's real dimensions.</p>
+
+<h2>Auto-decoding MAP##.MAP (the raw background image)</h2>
+<p>The "Background image" picker accepts a raw <code>MAP##.MAP</code> file directly -- no conversion to PNG needed first. Confirmed pixel-perfect against reference screenshots for two different maps of different sizes, the format is:</p>
+<ul>
+  <li>Bytes 0-1 / 2-3 (u16 each): the tile grid's width and height, in tiles.</li>
+  <li>Offset <code>0x404</code>: a generic bin-container -- <code>[total_size:u32][file_count:u32][offsets:u32 &times; file_count]</code>, all offsets relative to <code>0x404</code> itself. <code>file_count</code> always equals grid width &times; grid height.</li>
+  <li>Each sub-file: a 12-byte header (a <code>"DX"</code> magic + version, then tile width/height/pitch/flags as u16 each -- 256&times;256 in every map seen so far), followed immediately by that many pixels.</li>
+  <li>Pixel format is <b>RGB555</b> (5-5-5, not 565 -- the top bit of each 16-bit value is unused), little-endian, plain raster order, no swizzling.</li>
+  <li>Tiles are laid out left-to-right then top-to-bottom across the grid to form the full image.</li>
+</ul>
+<p>The decoder runs entirely client-side in JavaScript and was cross-checked instruction-for-instruction against an independent Python reference implementation before being wired in here.</p>
+
+<h2>Navigating large maps</h2>
+<ul>
+  <li><b>Drag</b> anywhere on the canvas (away from a handle) to pan.</li>
+  <li><b>Scroll wheel</b> zooms in/out, centered on the cursor.</li>
+  <li><b>WASD or arrow keys</b> pan in fixed steps (hold Shift for a larger step); <b>+/-</b> zoom; <b>0</b> resets the view.</li>
+  <li>The on-screen directional pad and +/- buttons (bottom corners of the canvas) do the same, for trackpad-only or precise single-step adjustments.</li>
+  <li>None of this panning/zooming affects calibration -- it's purely a camera over the canvas, so you can navigate freely while still dragging handles or fine-tuning alignment.</li>
+</ul>
+
+<h2>Reading the overlay</h2>
+<ul>
+  <li>Each tile is drawn as a colored diamond, color-keyed by its terrain value (the legend panel on the right lists every distinct value found, with an editable label and a visibility toggle).</li>
+  <li>Tiles with a non-zero flag byte get a white outline -- these are the special/flagged zones (start points, retreat zones, enemy entry, etc. depending on the specific map).</li>
+  <li>Hovering the image shows the exact tile coordinate, its terrain value and label, and its flag value in the side panel.</li>
+</ul>
+
+<h2>Exports</h2>
+<ul>
+  <li><b>Overlay PNG</b> — flattens the current overlay (at its current opacity) onto the source image and downloads it as a single PNG.</li>
+  <li><b>Coordinate key (CSV)</b> — every tile's (x, y, terrain value, your label, flag) as a spreadsheet-friendly CSV, useful for cross-referencing against script data elsewhere.</li>
+</ul>
+`;
+
+document.addEventListener('DOMContentLoaded', () => {
+  $('#docsWrap').innerHTML = DOCS_HTML;
+  wireDropZone('dropZoneBin', loadBin, '.bin,.BIN');
+
+  $('#pngInput').addEventListener('change', e => { if (e.target.files[0]) loadImageOrMap(e.target.files[0]); });
+  $('#binInput').addEventListener('change', e => { if (e.target.files[0]) loadBin(e.target.files[0]); });
+
+  $('#opacitySlider').addEventListener('input', e => {
+    state.opacity = parseInt(e.target.value, 10) / 100;
+    $('#opacityVal').textContent = e.target.value + '%';
+    renderOverlay();
+  });
+
+  $('#exportBtn').addEventListener('click', () => {
+    if (!state.tiles.length) return toast('Load a MAP##.BIN first', true);
+    exportOverlayPng();
+  });
+  $('#exportKeyBtn').addEventListener('click', () => {
+    if (!state.tiles.length) return toast('Load a MAP##.BIN first', true);
+    exportKeyCsv();
+  });
+
+  $$('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      $$('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      $$('.view').forEach(v => v.classList.remove('active'));
+      $('#view-' + tab.dataset.view).classList.add('active');
+    });
+  });
+});
+</script>
+</body>
+</html>
