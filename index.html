@@ -63,6 +63,20 @@ input[type=file]{ display:none; }
   width:56px; font-family:var(--mono); background:var(--bg); border:1px solid var(--line); color:var(--ink); padding:4px 6px; font-size:11.5px;
 }
 .toolbar .val{ color:var(--accent); font-size:11px; width:34px; display:inline-block; text-align:right; }
+.switch{ position:relative; display:inline-block; width:32px; height:18px; flex-shrink:0; }
+.switch input{ opacity:0; width:0; height:0; }
+.switch .slider{
+  position:absolute; cursor:pointer; inset:0; background: var(--line); transition:.15s;
+}
+.switch .slider:before{
+  position:absolute; content:""; height:13px; width:13px; left:2.5px; top:2.5px;
+  background: var(--ink-faint); transition:.15s;
+}
+.switch input:checked + .slider{ background: var(--accent-dim); }
+.switch input:checked + .slider:before{ background: var(--accent); transform: translateX(14px); }
+.switch input:focus-visible + .slider{ outline: 1px solid var(--accent-dim); outline-offset:2px; }
+.layer-toggle{ display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--ink-dim); }
+.layer-toggle.off{ color: var(--ink-faint); }
 
 .tabs{ display:flex; gap:2px; border-bottom:1px solid var(--line); background: var(--bg-panel); padding: 0 20px; }
 .tab{ padding: 10px 16px; cursor:pointer; color: var(--ink-faint); font-size:12px; letter-spacing:0.03em; text-transform:uppercase; border-bottom: 2px solid transparent; }
@@ -85,8 +99,9 @@ input[type=file]{ display:none; }
 .canvas-viewport{ position:absolute; top:0; left:0; width:100%; height:100%; overflow:hidden; cursor:grab; }
 .canvas-viewport.grabbing{ cursor:grabbing; }
 .canvas-wrap{ position:absolute; top:0; left:0; transform-origin: 0 0; }
-#baseCanvas, #overlayCanvas{ position:absolute; top:0; left:0; image-rendering: pixelated; }
+#baseCanvas, #overlayCanvas, #vptCanvas{ position:absolute; top:0; left:0; image-rendering: pixelated; }
 #overlayCanvas{ cursor: crosshair; }
+#vptCanvas{ pointer-events:none; }
 
 .pan-controls{
   position:absolute; bottom:16px; right:16px; z-index:30;
@@ -200,8 +215,19 @@ input[type=file]{ display:none; }
   <input type="file" id="pngInput" accept=".png,.jpg,.jpeg,.gif,.webp,.map">
   <label class="drop-label" for="binInput">Replace MAP##.BIN…</label>
   <input type="file" id="binInput" accept=".bin">
+  <label class="drop-label" for="vptInput">Replace MAP##.VPT…</label>
+  <input type="file" id="vptInput" accept=".vpt">
   <div class="sep"></div>
-  <label class="inline">Overlay opacity <input type="range" id="opacitySlider" min="0" max="100" value="55"><span class="val" id="opacityVal">55%</span></label>
+  <label class="layer-toggle" id="terrainToggleWrap" title="Show/hide the terrain layer">
+    <span class="switch"><input type="checkbox" id="terrainVisibleToggle" checked><span class="slider"></span></span>
+    Terrain
+  </label>
+  <label class="inline">opacity <input type="range" id="opacitySlider" min="0" max="100" value="55"><span class="val" id="opacityVal">55%</span></label>
+  <div class="sep"></div>
+  <label class="layer-toggle" id="vptToggleWrap" title="Show/hide the VPT zone layer">
+    <span class="switch"><input type="checkbox" id="vptVisibleToggleToolbar"><span class="slider"></span></span>
+    VPT zones
+  </label>
   <div class="sep"></div>
   <button id="exportBtn">Export overlay PNG</button>
   <button id="exportKeyBtn">Export coordinate key (CSV)</button>
@@ -253,7 +279,15 @@ let state = {
     panX: 0, panY: 0, zoom: 1,
   },
   opacity: 0.55,
+  terrainVisible: true,
   hoverTile: null,
+  // MAP##.VPT (pathfinding "NodeWork" data) -- independent of the terrain
+  // layer above: its own data, its own visibility toggle, its own opacity.
+  vpt: null,              // { records, zoneGrid, tileW, tileH } or null if not loaded
+  vptColors: [],          // recordIndex -> [r,g,b]
+  vptVisible: false,
+  vptOpacity: 0.5,
+  vptSelectedZone: null,  // record index clicked for detail view, or null
 };
 
 function toast(msg, bad) {
@@ -355,10 +389,21 @@ function loadBin(file) {
   reader.onload = () => {
     state.binBuffer = reader.result;
     try {
+      const prevW = state.tileW, prevH = state.tileH;
       parseMapBin(state.binBuffer);
-      toast(`Parsed ${file.name}: ${state.tiles.length} tiles, grid ${state.tileW}\u00d7${state.tileH}`);
+      let msg = `Parsed ${file.name}: ${state.tiles.length} tiles, grid ${state.tileW}\u00d7${state.tileH}`;
+      // a VPT loaded for a different map's tile grid would silently mismatch
+      // against the new one -- clear it rather than risk drawing garbage
+      if (state.vpt && (state.tileW !== prevW || state.tileH !== prevH)) {
+        state.vpt = null;
+        state.vptVisible = false;
+        state.vptSelectedZone = null;
+        msg += ' \u2014 cleared the loaded VPT zones (tile grid changed); load the matching MAP##.VPT again';
+      }
+      toast(msg);
       if ($('#overlayCanvas')) {
         renderLegend();
+        renderVptControls();
         renderAll();
       } else {
         checkReadyToInit();
@@ -368,6 +413,44 @@ function loadBin(file) {
     }
   };
   reader.readAsArrayBuffer(file);
+}
+
+function loadVpt(file) {
+  if (!state.tiles.length) {
+    toast('Load the matching MAP##.BIN first -- the VPT zone grid is sized against its tile dimensions', true);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onerror = () => {
+    console.error('FileReader error reading', file.name, reader.error);
+    toast('Could not read ' + file.name + ': ' + reader.error, true);
+  };
+  reader.onload = () => {
+    try {
+      const vpt = parseMapVpt(reader.result);
+      state.vpt = vpt;
+      state.vptVisible = true;
+      const uniqZones = new Set(vpt.zoneGrid).size;
+      toast(`Parsed ${file.name}: ${vpt.records.length} zone records, ${uniqZones} used on the grid`);
+      buildVptColors();
+      renderVptControls();
+      renderVptLayer();
+    } catch (e) {
+      console.error('parseMapVpt failed for', file.name, e);
+      toast('Could not parse this .VPT file: ' + e.message, true);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function buildVptColors() {
+  if (!state.vpt) return;
+  const n = state.vpt.records.length;
+  state.vptColors = [];
+  for (let i = 0; i < n; i++) {
+    const hue = i / Math.max(1, n);
+    state.vptColors.push(hsvToRgb(hue, 0.85, 0.95));
+  }
 }
 
 function checkReadyToInit() {
@@ -529,6 +612,96 @@ function parseMapBin(buf) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// MAP##.VPT parsing -- the AI pathfinding support data ("NodeWork" in the
+// game's own source). Confirmed format, traced through the actual loader
+// code in the decompiled exe and verified byte-for-byte against three real
+// files of different sizes:
+//
+//   Header (40 bytes): [totalSize:u32][chunkCount:u32][offsets:u32 x 8]
+//   chunkCount is always 8: chunks 0-3 are record tables (identical copies
+//   of each other in every file seen so far -- the engine supports 4
+//   independent slots, selected by an index the one traced call site always
+//   passes as 0, but nothing in the shipped data actually differs between
+//   them); chunks 4-7 are flat per-tile "zone index" grids (also identical
+//   copies of each other).
+//
+//   Record-table chunk layout:
+//     +0x00: "MapEditFlIDCode\0" tag (16 bytes)
+//     +0x10: u32, constant 28 in every file seen -- not needed to parse
+//     +0x14: u32 record count N
+//     +0x18: N x u32 *relative* offsets (relative to the chunk's own start)
+//            to each record
+//   Each record (at chunk_start + relative_offset):
+//     +0x00: u16 "id" -- this is NOT one number: byte 0 is a tile COLUMN,
+//            byte 1 is a tile ROW (confirmed against the exe code, which
+//            reads the two bytes of this field completely separately as
+//            (x, y) when computing distances between zones)
+//     +0x02: u16 count M (how many nearby tiles this zone records)
+//     +0x04: M x 12 bytes: [tileIndex:u32][distance:f32][distanceSquared:u32]
+//
+//   Zone-grid chunk layout: tileW*tileH x u16, row-major, each value an
+//   index into the record table above (0 <= value < record count -- every
+//   value in every file checked so far satisfies this exactly).
+// ---------------------------------------------------------------------------
+function parseMapVpt(buf) {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 40) throw new Error('file too small to contain the expected header');
+
+  const totalSize = dv.getUint32(0, true);
+  const chunkCount = dv.getUint32(4, true);
+  if (totalSize !== buf.byteLength) {
+    throw new Error(`header size field (${totalSize}) doesn't match the actual file size (${buf.byteLength})`);
+  }
+  if (chunkCount < 8) {
+    throw new Error(`expected at least 8 chunks, found ${chunkCount} -- this may not be a recognized MAP##.VPT layout`);
+  }
+
+  const offsets = [];
+  for (let i = 0; i < chunkCount; i++) offsets.push(dv.getUint32(8 + i * 4, true));
+  const chunkEnd = (i) => i + 1 < chunkCount ? offsets[i + 1] : totalSize;
+
+  // --- record table (chunk 0) ---
+  const c0 = offsets[0];
+  const tag = new TextDecoder('ascii').decode(new Uint8Array(buf, c0, 15));
+  if (tag !== 'MapEditFlIDCode') {
+    throw new Error('chunk 0 is missing the expected "MapEditFlIDCode" tag -- offsets may be wrong for this file');
+  }
+  const recordCount = dv.getUint32(c0 + 0x14, true);
+  const records = [];
+  for (let i = 0; i < recordCount; i++) {
+    const relOff = dv.getUint32(c0 + 0x18 + i * 4, true);
+    const recOff = c0 + relOff;
+    const col = dv.getUint8(recOff);
+    const row = dv.getUint8(recOff + 1);
+    const nearCount = dv.getUint16(recOff + 2, true);
+    const nearby = [];
+    for (let j = 0; j < nearCount; j++) {
+      const eo = recOff + 4 + j * 12;
+      nearby.push({
+        tileIndex: dv.getUint32(eo, true),
+        distance: dv.getFloat32(eo + 4, true),
+        distanceSquared: dv.getUint32(eo + 8, true),
+      });
+    }
+    records.push({ index: i, col, row, nearby });
+  }
+
+  // --- zone grid (chunk 4) ---
+  const c4 = offsets[4];
+  const c4size = chunkEnd(4) - c4;
+  const gridCells = c4size / 2;
+  const tileW = state.tileW || 0;
+  const tileH = state.tileH || 0;
+  if (tileW && tileH && gridCells !== tileW * tileH) {
+    throw new Error(`zone grid has ${gridCells} cells but the loaded MAP##.BIN's tile grid is ${tileW}\u00d7${tileH}=${tileW*tileH} -- load the matching .BIN for this map first`);
+  }
+  const zoneGrid = new Uint16Array(gridCells);
+  for (let i = 0; i < gridCells; i++) zoneGrid[i] = dv.getUint16(c4 + i * 2, true);
+
+  return { records, zoneGrid, tileW, tileH };
+}
+
 function hsvToRgb(h, s, v) {
   let r, g, b;
   const i = Math.floor(h * 6);
@@ -562,6 +735,7 @@ function initWorkbench() {
           <div class="canvas-wrap" id="canvasWrap">
             <canvas id="baseCanvas"></canvas>
             <canvas id="overlayCanvas"></canvas>
+            <canvas id="vptCanvas"></canvas>
           </div>
         </div>
         <div class="pan-controls">
@@ -618,6 +792,13 @@ function initWorkbench() {
           <div style="font-size:10.5px; color:var(--ink-faint); margin-top:8px; line-height:1.5;">${state.img ? 'A raw MAP##.MAP file is decoded automatically (RGB555 tile atlas, no conversion needed).' : 'Working from tile data alone -- canvas is set to 2048&times;1536, the known size of this map\'s reference screenshot. Drop a screenshot, or the raw MAP##.MAP file itself -- it decodes automatically.'}</div>
         </div>
         <div class="side-section">
+          <h3>VPT zones (pathfinding)</h3>
+          <label class="drop-label" for="vptInputSide" style="display:block; text-align:center;">${state.vpt ? 'Replace MAP##.VPT…' : 'Load MAP##.VPT…'}</label>
+          <input type="file" id="vptInputSide" accept=".vpt">
+          <div id="vptControls" style="margin-top:10px;"></div>
+          <div id="vptRecordDetail"></div>
+        </div>
+        <div class="side-section">
           <h3>Cursor</h3>
           <div class="hover-info" id="hoverInfo">Hover the image to read tile values.</div>
         </div>
@@ -632,6 +813,7 @@ function initWorkbench() {
 
   setupCanvases();
   renderLegend();
+  renderVptControls();
   renderAll();
   wireCalibrationControls();
   wirePanZoomControls();
@@ -653,6 +835,7 @@ function initWorkbench() {
   }
 
   $('#pngInputSide').addEventListener('change', e => { if (e.target.files[0]) loadImageOrMap(e.target.files[0]); });
+  $('#vptInputSide').addEventListener('change', e => { if (e.target.files[0]) loadVpt(e.target.files[0]); });
   $('#resetHandlesBtn').addEventListener('click', resetHandlesToDefault);
   $('#saveCalibBtn').addEventListener('click', saveCalibration);
   $('#loadCalibBtn').addEventListener('click', () => $('#calibFileInput').click());
@@ -663,7 +846,8 @@ function setupCanvases() {
   const w = state.canvasW, h = state.canvasH;
   const base = $('#baseCanvas');
   const overlay = $('#overlayCanvas');
-  [base, overlay].forEach(c => { c.width = w; c.height = h; });
+  const vpt = $('#vptCanvas');
+  [base, overlay, vpt].forEach(c => { c.width = w; c.height = h; });
   $('#canvasWrap').style.width = w + 'px';
   $('#canvasWrap').style.height = h + 'px';
 
@@ -682,6 +866,7 @@ function setupCanvases() {
 
   overlay.addEventListener('mousemove', onCanvasHover);
   overlay.addEventListener('mouseleave', () => { state.hoverTile = null; $('#hoverInfo').textContent = 'Hover the image to read tile values.'; renderOverlay(); });
+  overlay.addEventListener('click', onCanvasClickForVptSelect);
 }
 
 // Isometric tile -> screen center, standard diamond projection with rotation.
@@ -784,6 +969,31 @@ function screenToTile(sx, sy) {
 function renderAll() {
   if (!state.img || !state.tiles.length) return;
   renderOverlay();
+  renderVptLayer();
+}
+
+// Each tile is a diamond in TILE space. Its 4 corners are the surrounding
+// grid-line intersections (tx-0.5,ty-0.5), (tx+0.5,ty-0.5), (tx+0.5,ty+0.5),
+// (tx-0.5,ty+0.5) -- NOT offsets along the cardinal iso directions, which
+// would collapse into a degenerate sliver. Warping these 4 points
+// individually through the homography draws exactly the right shape for
+// whatever quad the handles currently describe -- no separate rotation
+// number, so it can never drift out of sync with a skewed/perspective fit.
+// Shared by both the terrain layer and the VPT zone layer.
+function tileCornersScreen(tx, ty) {
+  return [
+    tileToScreen(tx - 0.5, ty - 0.5),
+    tileToScreen(tx + 0.5, ty - 0.5),
+    tileToScreen(tx + 0.5, ty + 0.5),
+    tileToScreen(tx - 0.5, ty + 0.5),
+  ];
+}
+
+function drawDiamondAt(ctx, tx, ty) {
+  const pts = tileCornersScreen(tx, ty);
+  ctx.beginPath();
+  pts.forEach(([px, py], i) => { if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+  ctx.closePath();
 }
 
 function renderOverlay() {
@@ -791,30 +1001,8 @@ function renderOverlay() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!state.terrainVisible) return;
   ctx.globalAlpha = state.opacity;
-
-  // Each tile is a diamond in TILE space. Its 4 corners are the surrounding
-  // grid-line intersections (tx-0.5,ty-0.5), (tx+0.5,ty-0.5), (tx+0.5,ty+0.5),
-  // (tx-0.5,ty+0.5) -- NOT offsets along the cardinal iso directions, which
-  // would collapse into a degenerate sliver. Warping these 4 points
-  // individually through the homography draws exactly the right shape for
-  // whatever quad the handles currently describe -- no separate rotation
-  // number, so it can never drift out of sync with a skewed/perspective fit.
-  function tileCornersScreen(tx, ty) {
-    return [
-      tileToScreen(tx - 0.5, ty - 0.5),
-      tileToScreen(tx + 0.5, ty - 0.5),
-      tileToScreen(tx + 0.5, ty + 0.5),
-      tileToScreen(tx - 0.5, ty + 0.5),
-    ];
-  }
-
-  function drawDiamondAt(tx, ty) {
-    const pts = tileCornersScreen(tx, ty);
-    ctx.beginPath();
-    pts.forEach(([px, py], i) => { if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
-    ctx.closePath();
-  }
 
   for (const t of state.tiles) {
     if (state.hiddenTerrains.has(t.terrain)) continue;
@@ -822,7 +1010,7 @@ function renderOverlay() {
     if (cx < -40 || cx > canvas.width + 40 || cy < -40 || cy > canvas.height + 40) continue;
     const [r,g,b] = state.legendColors[t.terrain] || [128,128,128];
     ctx.fillStyle = `rgb(${r},${g},${b})`;
-    drawDiamondAt(t.x, t.y);
+    drawDiamondAt(ctx, t.x, t.y);
     ctx.fill();
     if (t.flag !== 0) {
       ctx.globalAlpha = Math.min(1, state.opacity + 0.35);
@@ -841,11 +1029,154 @@ function renderOverlay() {
       ctx.globalAlpha = 1;
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
-      drawDiamondAt(hx, hy);
+      drawDiamondAt(ctx, hx, hy);
       ctx.stroke();
     }
   }
   ctx.globalAlpha = 1;
+}
+
+// Independent VPT "NodeWork" zone layer -- its own canvas, its own
+// visibility flag, its own opacity, so it never interferes with the
+// terrain layer above. Each tile is colored by which zone record its grid
+// cell points at; the currently-selected zone (if any) gets a white
+// outline so its full extent is easy to see at a glance.
+function renderVptLayer() {
+  const canvas = $('#vptCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!state.vpt || !state.vptVisible) return;
+
+  ctx.globalAlpha = state.vptOpacity;
+  const { zoneGrid, tileW, tileH } = state.vpt;
+
+  for (let ty = 0; ty < tileH; ty++) {
+    for (let tx = 0; tx < tileW; tx++) {
+      const zoneIdx = zoneGrid[ty * tileW + tx];
+      const [cx, cy] = tileToScreen(tx, ty);
+      if (cx < -40 || cx > canvas.width + 40 || cy < -40 || cy > canvas.height + 40) continue;
+      const [r,g,b] = state.vptColors[zoneIdx] || [128,128,128];
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      drawDiamondAt(ctx, tx, ty);
+      ctx.fill();
+    }
+  }
+
+  if (state.vptSelectedZone !== null) {
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    for (let ty = 0; ty < tileH; ty++) {
+      for (let tx = 0; tx < tileW; tx++) {
+        if (zoneGrid[ty * tileW + tx] === state.vptSelectedZone) {
+          drawDiamondAt(ctx, tx, ty);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Toggle + opacity controls for the VPT layer, plus a short summary. Kept
+// separate from the terrain layer's controls entirely -- different file,
+// different visibility flag, different opacity, so neither can interfere
+// with the other.
+function renderVptControls() {
+  const el = $('#vptControls');
+  if (!el) return;
+  if (!state.vpt) {
+    el.innerHTML = `<div style="font-size:10.5px; color:var(--ink-faint); line-height:1.5;">Load the MAP##.VPT that matches the currently-loaded MAP##.BIN to see the AI pathfinding zone layer.</div>`;
+    syncVptToggles();
+    return;
+  }
+  el.innerHTML = `
+    <div class="field-row" style="margin-bottom:6px;">
+      <label class="layer-toggle ${state.vptVisible ? '' : 'off'}" style="cursor:pointer;">
+        <span class="switch"><input type="checkbox" id="vptVisibleToggle" ${state.vptVisible ? 'checked' : ''}><span class="slider"></span></span>
+        Show VPT zones
+      </label>
+    </div>
+    <div class="field-row">
+      <span>Opacity</span>
+      <input type="range" id="vptOpacitySlider" min="0" max="100" value="${Math.round(state.vptOpacity*100)}">
+      <span class="val" id="vptOpacityVal">${Math.round(state.vptOpacity*100)}%</span>
+    </div>
+    <div style="font-size:10.5px; color:var(--ink-faint); margin-top:8px; line-height:1.5;">
+      ${state.vpt.records.length} zones over a ${state.vpt.tileW}\u00d7${state.vpt.tileH} grid. Click a tile on the map (while zones are shown) to outline that zone\u2019s full extent and see its nearby-tile list below.
+    </div>
+  `;
+  $('#vptVisibleToggle').addEventListener('change', (e) => {
+    state.vptVisible = e.target.checked;
+    syncVptToggles();
+    renderVptLayer();
+  });
+  $('#vptOpacitySlider').addEventListener('input', (e) => {
+    state.vptOpacity = parseInt(e.target.value, 10) / 100;
+    $('#vptOpacityVal').textContent = e.target.value + '%';
+    renderVptLayer();
+  });
+  syncVptToggles();
+}
+
+// Keeps the toolbar's VPT switch and the side-panel's VPT switch showing
+// the exact same on/off state and enabled/disabled state, no matter which
+// one the user actually clicks. Single source of truth is state.vptVisible.
+function syncVptToggles() {
+  const toolbarToggle = $('#vptVisibleToggleToolbar');
+  const toolbarWrap = $('#vptToggleWrap');
+  const sideToggle = $('#vptVisibleToggle');
+  const hasVpt = !!state.vpt;
+  if (toolbarToggle) {
+    toolbarToggle.checked = hasVpt && state.vptVisible;
+    toolbarToggle.disabled = !hasVpt;
+  }
+  if (toolbarWrap) toolbarWrap.classList.toggle('off', !(hasVpt && state.vptVisible));
+  if (sideToggle) sideToggle.checked = state.vptVisible;
+}
+
+// Detail panel for whichever zone the user clicked -- lists every nearby
+// tile this zone's record knows about (tile index, decoded x/y, and the
+// precomputed distance/distance-squared straight from the file).
+function renderVptRecordDetail() {
+  const el = $('#vptRecordDetail');
+  if (!el) return;
+  if (!state.vpt || state.vptSelectedZone === null) {
+    el.innerHTML = '';
+    return;
+  }
+  const rec = state.vpt.records[state.vptSelectedZone];
+  if (!rec) { el.innerHTML = ''; return; }
+  const tileW = state.vpt.tileW;
+  const rows = rec.nearby.map(n => {
+    const nx = n.tileIndex % tileW, ny = Math.floor(n.tileIndex / tileW);
+    return `<div class="hr-row"><span class="hr-key" style="width:auto;">(${nx}, ${ny})</span><span>${n.distance.toFixed(2)}</span></div>`;
+  }).join('');
+  el.innerHTML = `
+    <div style="font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); margin:12px 0 6px 0;">
+      Zone #${state.vptSelectedZone} \u2014 anchor (${rec.col}, ${rec.row})
+    </div>
+    <div class="handle-readout" style="max-height:200px; overflow-y:auto;">
+      ${rows || '<span style="color:var(--ink-faint);">no nearby tiles recorded</span>'}
+    </div>
+  `;
+}
+
+function onCanvasClickForVptSelect(e) {
+  if (!state.vpt || !state.vptVisible) return;
+  const rect = e.target.getBoundingClientRect();
+  const scaleX = e.target.width / rect.width;
+  const scaleY = e.target.height / rect.height;
+  const sx = (e.clientX - rect.left) * scaleX;
+  const sy = (e.clientY - rect.top) * scaleY;
+  const [tx, ty] = screenToTile(sx, sy);
+  const { zoneGrid, tileW, tileH } = state.vpt;
+  if (tx < 0 || ty < 0 || tx >= tileW || ty >= tileH) return;
+  const zoneIdx = zoneGrid[ty * tileW + tx];
+  state.vptSelectedZone = state.vptSelectedZone === zoneIdx ? null : zoneIdx;
+  renderVptLayer();
+  renderVptRecordDetail();
 }
 
 function onCanvasHover(e) {
@@ -859,18 +1190,38 @@ function onCanvasHover(e) {
   const [tx, ty] = screenToTile(sx, sy);
   const tile = state.tiles.find(t => t.x === tx && t.y === ty);
   state.hoverTile = [tx, ty];
+  let html;
   if (tile) {
     const [r,g,b] = state.legendColors[tile.terrain] || [128,128,128];
     const name = state.legendNames[tile.terrain] || `terrain ${tile.terrain}`;
-    $('#hoverInfo').innerHTML = `
+    html = `
       <b>tile (${tx}, ${ty})</b><br>
       <span class="swatch" style="background:rgb(${r},${g},${b})"></span>${escapeHtml(name)} (value ${tile.terrain})<br>
       flag: ${tile.flag}${tile.flag !== 0 ? ' <span style="color:var(--warn)">(special zone)</span>' : ''}
     `;
   } else {
-    $('#hoverInfo').innerHTML = `<b>tile (${tx}, ${ty})</b><br><span style="color:var(--ink-faint)">no data (outside grid)</span>`;
+    html = `<b>tile (${tx}, ${ty})</b><br><span style="color:var(--ink-faint)">no data (outside grid)</span>`;
   }
+  if (state.vpt && tile) {
+    html += vptHoverHtml(tx, ty);
+  }
+  $('#hoverInfo').innerHTML = html;
   renderOverlay();
+}
+
+// Builds the VPT zone-info fragment appended to the main hover readout, and
+// is also reused by the dedicated VPT panel's own hover/click display.
+function vptHoverHtml(tx, ty) {
+  const { zoneGrid, tileW, tileH } = state.vpt;
+  if (tx < 0 || ty < 0 || tx >= tileW || ty >= tileH) return '';
+  const zoneIdx = zoneGrid[ty * tileW + tx];
+  const rec = state.vpt.records[zoneIdx];
+  const [r,g,b] = state.vptColors[zoneIdx] || [128,128,128];
+  if (!rec) return `<hr style="border-color:var(--line-soft); margin:6px 0;">VPT zone: <span style="color:var(--bad)">index ${zoneIdx} (no record)</span>`;
+  return `<hr style="border-color:var(--line-soft); margin:6px 0;">
+    <b>VPT zone #${zoneIdx}</b><br>
+    <span class="swatch" style="background:rgb(${r},${g},${b})"></span>anchor (${rec.col}, ${rec.row}) &middot; ${rec.nearby.length} nearby tile${rec.nearby.length===1?'':'s'}
+    <div style="font-size:10px; color:var(--ink-faint); margin-top:2px;">click the map to outline this zone\u2019s full extent</div>`;
 }
 
 function escapeHtml(s) {
@@ -1373,6 +1724,13 @@ const DOCS_HTML = `
 <b>Correction history:</b> an earlier version of this tool assumed a 32-byte header. It produced a recognizable-looking image, since most of the extra 18 bytes happened to decode into plausible small terrain values, but it silently dropped the whole grid 3 tile-columns out of alignment -- visible as a solid void-color band along one edge and a matching gap at the opposite edge. The error only became clear once a render was diffed directly against an independently-confirmed-correct reference image. If an overlay ever looks shifted by a small, constant, rectangular amount again, re-checking the header size against a fresh reference is the first thing to try.
 </div>
 
+<h2>MAP##.VPT layout -- AI pathfinding data ("NodeWork")</h2>
+<p>Traced through the game's own loader code rather than reverse-engineered from bytes alone. Internally the engine calls this system <b>"NodeWork"</b> -- it's what lets a unit's AI quickly check whether it can reach a tile and roughly how far away it is, without running a full search every time.</p>
+<p>Header (40 bytes): <code>[totalSize:u32][chunkCount:u32][offsets:u32 &times; 8]</code>. <code>chunkCount</code> is always 8 in every file seen so far. Chunks 0-3 are record tables; chunks 4-7 are flat per-tile zone-index grids. The engine supports 4 independent slots of each (selected by an index in the original code), but in every file checked, all 4 record-table chunks are byte-identical to each other, and all 4 grid chunks are byte-identical to each other -- this tool only loads slot 0, the one the traced gameplay code actually calls into.</p>
+<p><b>Record-table chunk:</b> a <code>"MapEditFlIDCode\0"</code> tag (16 bytes), a constant <code>u32</code> always equal to 28 (purpose not needed for decoding), a <code>u32</code> record count, then that many <code>u32</code> relative offsets to the actual records. Each record: a <code>u16</code> "id" field that is <i>not</i> one number -- its low byte is a tile column, its high byte is a tile row (confirmed directly against the exe, which reads the two bytes completely separately) -- followed by a <code>u16</code> count of nearby tiles, then that many 12-byte entries: <code>[tileIndex:u32][distance:f32][distanceSquared:u32]</code>.</p>
+<p><b>Zone-grid chunk:</b> <code>tileWidth &times; tileHeight</code> values, one <code>u16</code> per tile, row-major. Each value is an index into the record table above -- every value in every file checked so far is a valid index (<code>0 &le; value &lt;</code> record count), with no exceptions.</p>
+<p>This tool requires the matching <code>MAP##.BIN</code> to already be loaded before a <code>.VPT</code> file, since the zone grid's dimensions are validated against that file's tile grid (and the VPT format itself doesn't repeat them).</p>
+
 <h2>Calibrating the overlay</h2>
 <p>The tile grid has no embedded screen-space coordinates -- the header gives a render resolution, but a screenshot may be a cropped or zoomed view of only part of the full map, and the projection (an isometric diamond grid) has unknown per-map origin, scale, and camera rotation.</p>
 <p>Four <b>corner handles</b> default to the image's actual corners (TL/TR/BR/BL) and are draggable independently. The overlay is warped to fit exactly wherever the four handles currently sit, using a full perspective transform (a homography) rather than a rigid origin/scale/rotation model -- so dragging one handle never distorts or skews the other three, and there's no separate "rotation" number that can fall out of sync with where the handles actually are. Drag each handle to the matching diamond tip on your screenshot for a pixel-accurate fit.</p>
@@ -1422,11 +1780,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('#pngInput').addEventListener('change', e => { if (e.target.files[0]) loadImageOrMap(e.target.files[0]); });
   $('#binInput').addEventListener('change', e => { if (e.target.files[0]) loadBin(e.target.files[0]); });
+  $('#vptInput').addEventListener('change', e => { if (e.target.files[0]) loadVpt(e.target.files[0]); });
 
   $('#opacitySlider').addEventListener('input', e => {
     state.opacity = parseInt(e.target.value, 10) / 100;
     $('#opacityVal').textContent = e.target.value + '%';
     renderOverlay();
+  });
+
+  $('#terrainVisibleToggle').addEventListener('change', e => {
+    state.terrainVisible = e.target.checked;
+    $('#terrainToggleWrap').classList.toggle('off', !state.terrainVisible);
+    renderOverlay();
+  });
+
+  $('#vptVisibleToggleToolbar').addEventListener('change', e => {
+    state.vptVisible = e.target.checked;
+    syncVptToggles();
+    renderVptLayer();
   });
 
   $('#exportBtn').addEventListener('click', () => {
