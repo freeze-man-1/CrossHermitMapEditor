@@ -16,6 +16,11 @@ Based on the current source implementation, the editor supports the following fe
 * **Export:** Easily save map configurations in CSV format.
 ---
 
+## Formats
+* **MAP:** Game map texture broken into 256 x 256 textures to make the overall map.
+* **BIN:** Game terain height map
+* **VPT:** Game enemy pathing / detection areas.
+
 ## Roadmap & In-Development
 * **Re-importing Map Data:** I am actively working on improving the workflow for re-importing and updating existing map data seamlessly.
 * **New Map Support:** Expanding capabilities to create and support entirely new map structures and layouts.
